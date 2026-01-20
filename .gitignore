@@ -1,0 +1,19 @@
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# InsightFace models
+.insightface/
+
+# Environment
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store

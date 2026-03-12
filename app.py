@@ -43,14 +43,6 @@ def normalize_image(img):
         img = cv2.resize(img, (int(w * scale), int(h * scale)))
     return img
 
-@app.before_request
-def check_api_key():
-    client_key = request.headers.get("X-API-KEY")
-
-    if client_key != API_KEY:
-        return jsonify({"error": "Unauthorized"}), 401
-
-
 @app.route("/face-match", methods=["POST"])
 def face_match():
 

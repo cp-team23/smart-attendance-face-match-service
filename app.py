@@ -43,6 +43,10 @@ def normalize_image(img):
         img = cv2.resize(img, (int(w * scale), int(h * scale)))
     return img
 
+@app.route("/health")
+def health():
+    return {"status": "ok"}
+
 @app.route("/face-match", methods=["POST"])
 def face_match():
 
@@ -74,15 +78,6 @@ def face_match():
         "same_person": bool(similarity >= 0.5)
     })
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-
-    app.run(
-        host="0.0.0.0",
-        port=port,
-        debug=False,
-        use_reloader=False
-    )
 
 # python -m venv venv
 # venv\scripts\activate

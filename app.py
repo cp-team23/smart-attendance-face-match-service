@@ -13,24 +13,28 @@ import dlib
 app = Flask(__name__)
 CORS(app)
 
-face_app = FaceAnalysis(
-    name="buffalo_sc",
-    providers=["CPUExecutionProvider"],
-    allowed_modules=["detection", "recognition", "antifake"]
-)
-face_app.prepare(ctx_id=0, det_size=(320, 320))
+# Global variables - lazy loaded
+face_app = None
+dlib_detector = None
+dlib_predictor = None
 
-dummy = np.zeros((320, 320, 3), dtype=np.uint8)
-for _ in range(2):
-    face_app.get(dummy)
 
-print("InsightFace loaded & warmed up")
-
-# ── dlib detector (loaded once at startup)
-dlib_detector = dlib.get_frontal_face_detector()
-dlib_predictor = dlib.shape_predictor(dlib.PREDICTOR_68_FACE_LANDMARKS_PATH if hasattr(dlib, 'PREDICTOR_68_FACE_LANDMARKS_PATH') else "shape_predictor_68_face_landmarks.dat")
-
-print("dlib loaded")
+def load_models():
+    global face_app, dlib_detector, dlib_predictor
+    if face_app is None:
+        print("Loading models...")
+        face_app = FaceAnalysis(
+            name="buffalo_sc",
+            providers=["CPUExecutionProvider"],
+            allowed_modules=["detection", "recognition", "antifake"]
+        )
+        face_app.prepare(ctx_id=0, det_size=(320, 320))
+        dummy = np.zeros((320, 320, 3), dtype=np.uint8)
+        for _ in range(2):
+            face_app.get(dummy)
+        dlib_detector = dlib.get_frontal_face_detector()
+        dlib_predictor = dlib.shape_predictor("shape_predictor_68_face_landmarks.dat")
+        print("Models loaded!")
 
 
 # ─────────────────────────────────────────────
@@ -38,7 +42,6 @@ print("dlib loaded")
 # ─────────────────────────────────────────────
 
 def compute_lbp_score(face_roi):
-    """LBP texture entropy — real faces have higher entropy."""
     gray = cv2.cvtColor(face_roi, cv2.COLOR_BGR2GRAY)
     gray = cv2.resize(gray, (128, 128))
     radius, n_points = 1, 8
@@ -62,7 +65,6 @@ def compute_lbp_score(face_roi):
 
 
 def compute_reflection_score(face_roi):
-    """Specular highlight analysis — screens have unnatural blobs."""
     gray = cv2.cvtColor(face_roi, cv2.COLOR_BGR2GRAY)
     _, highlight_mask = cv2.threshold(gray, 220, 255, cv2.THRESH_BINARY)
     highlight_ratio = np.sum(highlight_mask > 0) / (gray.size + 1e-7)
@@ -78,14 +80,9 @@ def compute_reflection_score(face_roi):
 
 
 def compute_geometry_score(face_roi):
-    """
-    Dlib 68-landmark geometry — checks facial symmetry + eye/mouth ratios.
-    Falls back to 0.5 if no landmarks found.
-    """
     gray = cv2.cvtColor(face_roi, cv2.COLOR_BGR2GRAY)
     h, w = gray.shape
     rect = dlib.rectangle(0, 0, w, h)
-
     try:
         shape = dlib_predictor(gray, rect)
     except Exception:
@@ -93,7 +90,6 @@ def compute_geometry_score(face_roi):
 
     pts = np.array([[shape.part(i).x, shape.part(i).y] for i in range(68)])
 
-    # ── Metric 1: Face symmetry (left vs right horizontal spread)
     center_x = np.mean(pts[:, 0])
     left_pts = pts[pts[:, 0] < center_x]
     right_pts = pts[pts[:, 0] >= center_x]
@@ -103,8 +99,6 @@ def compute_geometry_score(face_roi):
         min(left_spread, right_spread) / (max(left_spread, right_spread) + 1e-7), 0.0, 1.0
     ))
 
-    # ── Metric 2: Eye aspect ratio (eyes should be open and proportional)
-    # Left eye: pts 36-41, Right eye: pts 42-47
     def eye_aspect_ratio(eye_pts):
         A = np.linalg.norm(eye_pts[1] - eye_pts[5])
         B = np.linalg.norm(eye_pts[2] - eye_pts[4])
@@ -114,10 +108,8 @@ def compute_geometry_score(face_roi):
     left_ear = eye_aspect_ratio(pts[36:42])
     right_ear = eye_aspect_ratio(pts[42:48])
     avg_ear = (left_ear + right_ear) / 2.0
-    # Normal open eye EAR: 0.25–0.35. Flat photo: often very low or very high
     ear_score = float(np.clip(1.0 - abs(avg_ear - 0.30) / 0.20, 0.0, 1.0))
 
-    # ── Metric 3: Face bbox aspect ratio
     bbox_w = pts[:, 0].max() - pts[:, 0].min()
     bbox_h = pts[:, 1].max() - pts[:, 1].min()
     aspect = min(bbox_w, bbox_h) / (max(bbox_w, bbox_h) + 1e-7)
@@ -147,7 +139,6 @@ def normalize_image(img):
 def check_liveness(img, face):
     result = {"is_live": True, "reason": None, "score": 1.0}
 
-    # ── Layer 1: InsightFace antifake score
     if hasattr(face, "antifake") and face.antifake is not None:
         spoof_score = float(face.antifake)
         result["score"] = spoof_score
@@ -165,7 +156,6 @@ def check_liveness(img, face):
 
     face_resized = cv2.resize(face_crop, (256, 256))
 
-    # ── Layer 2: Blur detection
     gray = cv2.cvtColor(face_resized, cv2.COLOR_BGR2GRAY)
     laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
     if laplacian_var < 30:
@@ -173,28 +163,24 @@ def check_liveness(img, face):
         result["reason"] = f"Image too blurry (sharpness: {laplacian_var:.1f})"
         return result
 
-    # ── Layer 3: LBP texture analysis
     lbp_score = compute_lbp_score(face_resized)
     if lbp_score < 0.38:
         result["is_live"] = False
         result["reason"] = f"Flat texture detected (LBP score: {lbp_score:.2f})"
         return result
 
-    # ── Layer 4: Reflection / screen glare detection
     ref_score = compute_reflection_score(face_resized)
     if ref_score < 0.25:
         result["is_live"] = False
         result["reason"] = f"Screen glare detected (reflection score: {ref_score:.2f})"
         return result
 
-    # ── Layer 5: Geometry / landmark check
     geo_score = compute_geometry_score(face_resized)
     if geo_score < 0.30:
         result["is_live"] = False
         result["reason"] = f"Implausible face geometry (geometry score: {geo_score:.2f})"
         return result
 
-    # ── Final weighted score
     final_score = (0.45 * lbp_score) + (0.35 * geo_score) + (0.20 * ref_score)
     result["score"] = round(final_score, 4)
 
@@ -216,11 +202,13 @@ def health():
 
 @app.route("/face-match", methods=["POST"])
 def face_match():
+    load_models()
+
     if "image1" not in request.files or "image2" not in request.files:
         return jsonify({"error": "Both images required"}), 400
 
-    img1 = read_image(request.files["image1"])  # DB photo — no liveness check
-    img2 = read_image(request.files["image2"])  # Live capture — liveness checked
+    img1 = read_image(request.files["image1"])
+    img2 = read_image(request.files["image2"])
 
     if img1 is None or img2 is None:
         return jsonify({"error": "Invalid image"}), 400
@@ -234,7 +222,6 @@ def face_match():
     if not faces1 or not faces2:
         return jsonify({"error": "No face detected"}), 400
 
-    # Liveness check on image2 only
     liveness = check_liveness(img2, faces2[0])
     if not liveness["is_live"]:
         return jsonify({
@@ -253,10 +240,5 @@ def face_match():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
-
-
-# python -m venv venv
-# venv\scripts\activate
-# pip install -r requirements.txt
-# python app.py
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)

@@ -2,7 +2,7 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# Install system dependencies
+# System dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
     gcc \
@@ -29,7 +29,7 @@ RUN pip install --upgrade pip
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Download dlib landmark model if not present
+# Download dlib landmark model
 RUN python3 -c "\
 import os, urllib.request, bz2; \
 DAT_FILE = 'shape_predictor_68_face_landmarks.dat'; \
@@ -45,5 +45,5 @@ print('Done!') \
 # Expose port
 EXPOSE 10000
 
-# Start with gunicorn
+# Start gunicorn
 CMD ["gunicorn", "-w", "1", "-b", "0.0.0.0:10000", "--timeout", "120", "app:app"]

@@ -197,7 +197,7 @@ def check_liveness(img, face):
 
 @app.route("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "face matching server is running"}
 
 
 @app.route("/face-match", methods=["POST"])

@@ -39,7 +39,7 @@ Models are lazy-loaded on the first request so the service starts up quickly.
 Simple health check.
 
 ```json
-{ "status": "ok" }
+{ "status": "face matching server is running" }
 ```
 
 ### `POST /face-match`
